@@ -45,12 +45,14 @@ def main(args):
 
     if args.test_solver:
         # test check_bleu
-        model = CaptionModel(2048, 512, 50, 100, len(data['idx_to_word']))
+        model = CaptionModel(2048, 100, 50, 100, len(data['idx_to_word']))
         solver = NetSolver(data, model)
         solver.check_bleu('train', num_samples=2000, check_loss=1)
 
     if args.train:
-        model = CaptionModel(2048, 256, 256, 256, len(data['idx_to_word']), num_layers=1)
+        #model = CaptionModel(2048, 128, 100, 200, len(data['idx_to_word']), num_layers=1)
+        model = CaptionModel_B(2048, 128, 160, len(data['idx_to_word']), num_layers=1)
+        #model = AttentionModel(2048, 128, 160, len(data['idx_to_word']))
         solver = NetSolver(data, model, batch_size=args.batch_size, checkpoint_name=args.cp_name)
 
         t0 = time.time()

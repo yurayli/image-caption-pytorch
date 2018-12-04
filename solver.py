@@ -24,8 +24,10 @@ def BLEU_score(gt_caption, sample_caption):
     return BLEUscore
 
 
+
 # solver of model with validation
 class NetSolver(object):
+
     def __init__(self, data, model, **kwargs):
         self.data = data
         self.model = model
@@ -73,6 +75,21 @@ class NetSolver(object):
         with open(output_path+'hyper_param_optim.json', 'w') as f:
             json.dump(checkpoint, f)
 
+
+    def forward_net(self, features, captions):
+        features = features.to(device=device)
+        captions = captions.to(device=device)
+        mask = (captions[:, 1:] != self._pad).view(-1)
+
+        cap_input = captions[:, :-1]
+        cap_target = captions[:, 1:]
+        scores, hidden = self.model(features, cap_input)
+        loss = F.cross_entropy(torch.reshape(scores, (-1, scores.size(2)))[mask],
+                               torch.reshape(cap_target, (-1,))[mask],
+                               size_average=False) / features.size(0)
+        return loss
+
+
     def train(self, epochs):
         N = self.data['train_captions'].shape[0]
 
@@ -83,16 +100,7 @@ class NetSolver(object):
             self.scheduler.step()  # update the scheduler
             for t, idx in enumerate(range(0, N, self.batch_size)):
                 captions, features = get_batch(self.data, idx, self.batch_size)
-                features = features.to(device=device)
-                captions = captions.to(device=device)
-                mask = (captions[:, 1:] != self._pad).view(-1)
-
-                cap_input = captions[:, :-1]
-                cap_target = captions[:, 1:].contiguous()
-                scores, hidden = self.model(features, cap_input)
-                loss = torch.sum(F.cross_entropy(scores.view(-1, scores.size(2))[mask],
-                                                 cap_target.view(-1)[mask],
-                                                 reduce=False)) / self.batch_size
+                loss = self.forward_net(features, captions)
                 if (t + 1) % self.print_every == 0:
                     bch_loss = loss.item()
                     print('t = %d, loss = %.4f' % (t+1, bch_loss))
@@ -106,13 +114,13 @@ class NetSolver(object):
 
             # Checkpoint and record/print metrics at epoch end
             train_bleu = self.check_bleu('train', num_samples=2000)
-            val_loss, val_bleu = self.check_bleu('val',
-                                    num_samples=2000, check_loss=True)
+            val_loss, val_bleu = self.check_bleu('val', num_samples=2000, check_loss=True)
 
             self.loss_history.append(bch_loss)
             self.val_loss_history.append(val_loss)
             self.bleu_history.append(train_bleu)
             self.val_bleu_history.append(val_bleu)
+
             # for floydhub metric graphs
             print('{"metric": "BLEU.", "value": %.4f}' % (train_bleu,))
             print('{"metric": "Val. BLEU.", "value": %.4f}' % (val_bleu,))
@@ -125,63 +133,157 @@ class NetSolver(object):
                 self._save_checkpoint(e+1)
             print()
 
-    def sample(self, features, max_length=40):
+
+    def sample(self, features, max_length=40, b_size=3, model_mode='nic', search_mode='beam'):
         self.model.eval()  # set model to "evaluation" mode
 
         N = features.size(0)
-        captions = self._pad * np.ones((N, max_length), dtype=np.int32)
-        is_end = np.zeros(N).astype(np.bool)  # mark if a sequence has ended, (batch_size, )
 
-        # prepare model input
-        features = features.to(device=device)
-        features = F.dropout(self.model.bn_f(features), 0.2, self.model.training)
-        features = self.model.dropout(features)
-        feeds = torch.ones((N, 1)) * self._start                                       # initial feed, (batch_size, 1)
-        feeds = feeds.to(device=device, dtype=torch.long)
+        if model_mode == 'nic':
 
-        im_hid = self.model.dropout(self.model.relu(self.model.proj_h(features))).unsqueeze(0)
-        im_state = self.model.dropout(self.model.relu(self.model.proj_c(features))).unsqueeze(0)
-        h0 = torch.cat((im_hid, ) * self.model.num_layers, 0)                          # h0, c0: (num_layers, batch_size, hidden_dim)
-        #h0 = torch.zeros((self.model.num_layers, N, self.model.hidden_dim)).to(device=device)
-        c0 = torch.cat((im_state, ) * self.model.num_layers, 0)
-        #c0 = torch.zeros(h0.size()).to(device=device)
-        hidden = (h0, c0)
+            # prepare model input
+            features = features.to(device=device)
+            features = self.model.dropout(self.model.bn_f(features))
+            feeds = torch.ones((N, 1)) * self._start                                       # initial feed, (N, 1)
+            feeds = feeds.to(device=device, dtype=torch.long)
 
-        features = self.model.dropout(self.model.relu(self.model.proj_f(features)))
+            im_hid = self.model.dropout(self.model.relu(self.model.proj_h(features))).unsqueeze(0)
+            im_state = self.model.dropout(self.model.relu(self.model.proj_c(features))).unsqueeze(0)
+            h0 = torch.cat((im_hid, ) * self.model.num_layers, 0)                          # h0, c0: (L, N, H)
+            #h0 = torch.zeros((self.model.num_layers, N, self.model.hidden_dim)).to(device=device)
+            c0 = torch.cat((im_state, ) * self.model.num_layers, 0)
+            #c0 = torch.zeros(h0.size()).to(device=device)
+            hidden = (h0, c0)
 
-        for t in range(max_length):
-            word_scores, hidden = self.model.rnn(word_seq=feeds, im_feat=features,     # word_scores: (batch_size, 1, vocab_size)
-                                                 hidden=hidden)
-            feeds = torch.argmax(word_scores.squeeze(1), dim=1, keepdim=True)          # feeds: (batch_size, 1)
+            features = self.model.relu(self.model.proj_f(features)).unsqueeze(1)
+            _, hidden = self.model.rnn.lstm(features, hidden)
 
-            ends_idx = np.where(feeds.cpu().data.numpy() == self._end)[0]
-            if len(ends_idx) > 0:
-                is_end[ends_idx] = True
-            words_out_idx = feeds.cpu().data.numpy()
-            words_out_idx[is_end] = self._pad
-            captions[:, t] = words_out_idx.ravel()
+            if search_mode == 'greedy':
+                captions = self._pad * np.ones((N, max_length), dtype=np.int32)
+                captions[:, 0] = np.ones(N) * self._start
+                for t in range(1, max_length):
+                    #word_scores, hidden = self.model.rnn(word_seq=feeds, im_feat=features,     # word_scores: (N, 1, V)
+                    #                                     hidden=hidden)
+                    word_scores, hidden = self.model.rnn(word_seq=feeds, hidden=hidden)
+                    feeds = torch.argmax(word_scores.squeeze(1), dim=1, keepdim=True)          # feeds: (N, 1)
+                    captions[:, t] = feeds.data.cpu().numpy().ravel()
+
+            if search_mode == 'beam':
+                for t in range(max_length-1):
+                    scores, hidden = self.model.rnn(word_seq=feeds, hidden=hidden)
+                    scores = F.softmax(scores.squeeze(), -1)
+
+                    if t == 0:
+                        scores = scores.log()   # (N, V)
+                        sorted_scores, idxes = scores.topk(b_size, dim=1)   # (N, B)
+                        candidates = idxes.unsqueeze(-1)   # (N, B, 1)
+                        feeds = torch.reshape(candidates, (-1,1))   # (N*B, 1)
+
+                        V = scores.size(-1)
+                        h, c = hidden
+                        h = torch.reshape(torch.cat([h]*b_size, -1), (h.size(0), -1, h.size(-1)))   # (L, N*B, H)
+                        c = torch.reshape(torch.cat([c]*b_size, -1), (c.size(0), -1, c.size(-1)))
+                        hidden = (h, c)
+
+                    else:
+                        scores = scores.log() + sorted_scores.view(-1,1)   # (N*B, V)
+                        scores = torch.reshape(scores, (N, -1))   # (N, B*V)
+                        sorted_scores, idxes = scores.topk(b_size, dim=1)   # (N, B)
+
+                        prior_candidate = candidates[np.arange(N)[:,None], idxes / V]   # (N, B, t)
+                        current_candidate = (idxes % V).unsqueeze(-1)   # (N, B, 1)
+                        candidates = torch.cat([prior_candidate, current_candidate], -1)   # (N, B, t+1)
+
+                        feeds = torch.reshape(candidates[:,:,-1], (-1,1))   # (N*B, 1)
+
+                captions = candidates[:,0,:].squeeze().data.cpu().numpy()
+                captions = np.concatenate([np.ones((N,1), dtype=np.int32) * self._start, captions], 1)
+
+        if model_mode == 'attentive':
+
+            # prepare model input
+            D = features.size(1)
+            features = features.to(device=device)
+            features = features.transpose(1,-1)
+            features = torch.reshape(features, (N, -1, D))
+            feeds = torch.ones((N, 1)) * self._start                                # initial feed, (N, 1)
+            feeds = feeds.to(device=device, dtype=torch.long)
+
+            feat_mean = features.mean(1)
+            h = self.model.dropout(self.model.tanh(self.model.proj_h(feat_mean)))   # (N, H)
+            c = self.model.dropout(self.model.tanh(self.model.proj_c(feat_mean)))   # (N, H)
+
+            feat_proj = self.model.proj_f(features)
+
+            if search_mode == 'greedy':
+                captions = self._pad * np.ones((N, max_length), dtype=np.int32)
+                captions[:, 0] = np.ones(N) * self._start
+                for t in range(1, max_length):
+                    context, alpha = self.model.attn(features, feat_proj, h)   # (N, D), (N, L)
+                    word_scores, h, c = self.model.rnn(feeds, context, (h,c))
+                    feeds = torch.argmax(word_scores, dim=1, keepdim=True)   # feeds: (N, 1)
+                    captions[:, t] = feeds.data.cpu().numpy().ravel()
+
+            if search_mode == 'beam':
+                for t in range(max_length-1):
+                    if t == 0:
+                        print(t)
+                        context, alpha = self.model.attn(features, feat_proj, h)   # (N, D), (N, L)
+                        scores, h, c = self.model.rnn(feeds, context, (h,c))
+                        scores = F.softmax(scores, -1)
+
+                        scores = scores.log()   # (N, V)
+                        sorted_scores, idxes = scores.topk(b_size, dim=1)   # (N, B)
+                        candidates = idxes.unsqueeze(-1).cpu()   # (N, B, 1)
+                        feeds = torch.reshape(candidates, (-1,1)).cuda()   # (N*B, 1)
+
+                        V = scores.size(-1)
+                        h = torch.cat([h]*b_size, 0)   # (N*B, H)
+                        c = torch.cat([c]*b_size, 0)
+                        features = torch.cat([features]*b_size, 0)
+                        feat_proj = torch.cat([feat_proj]*b_size, 0)
+
+                    else:
+                        print(t)
+                        context, alpha = self.model.attn(features, feat_proj, h)   # (N*B, D), (N*B, L)
+                        scores, h, c = self.model.rnn(feeds, context, (h,c))
+                        scores = F.softmax(scores, -1)
+
+                        scores = scores.log() + sorted_scores.view(-1,1)   # (N*B, V)
+                        scores = torch.reshape(scores, (N, -1))   # (N, B*V)
+                        sorted_scores, idxes = scores.topk(b_size, dim=1)   # (N, B)
+
+                        prior_candidate = candidates[np.arange(N)[:,None], idxes / V]   # (N, B, t)
+                        current_candidate = (idxes % V).unsqueeze(-1).cpu()   # (N, B, 1)
+                        candidates = torch.cat([prior_candidate, current_candidate], -1)   # (N, B, t+1)
+
+                        feeds = torch.reshape(candidates[:,:,-1], (-1,1)).cuda()   # (N*B, 1)
+
+                captions = candidates[:,0,:].squeeze().data.cpu().numpy()
+                captions = np.concatenate([np.ones((N,1), dtype=np.int32) * self._start, captions], 1)
 
         return captions
 
-    def check_bleu(self, split, num_samples, batch_size=512, check_loss=False):
+
+    def check_bleu(self, split, num_samples, batch_size=32, check_loss=False):
         captions, features, _ = sample_batch(self.data, num_samples, split)
         gt_captions = decode_captions(captions.numpy(), self.data['idx_to_word'])
-        if check_loss:
-            features = features.to(device=device)
-            captions = captions.to(device=device)
-            mask = (captions[:, 1:] != self._pad).view(-1)
-
-            self.model.eval()  # set model to "evaluation" mode
-            cap_input = captions[:, :-1]
-            cap_target = captions[:, 1:].contiguous()
-            scores, hidden = self.model(features, cap_input)
-            loss = torch.sum(F.cross_entropy(scores.view(-1, scores.size(2))[mask],
-                                             cap_target.view(-1)[mask],
-                                             reduce=False)) / num_samples
-
         num_batches = num_samples // batch_size
         if num_samples % batch_size != 0:
             num_batches += 1
+
+        if check_loss:
+            self.model.eval()
+            loss = 0
+            for i in range(num_batches):
+                print(i)
+                start = i * batch_size
+                end = (i + 1) * batch_size
+                feat_batch = features[start:end].clone()
+                cap_batch = captions[start:end].clone()
+                loss += self.forward_net(feat_batch, cap_batch)
+            loss /= num_batches
+
         total_score = 0.
         for i in range(num_batches):
             start = i * batch_size
