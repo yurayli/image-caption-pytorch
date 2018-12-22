@@ -72,45 +72,33 @@ def main(args):
         print('Training complete in {:.0f}m {:.0f}s.'.format(time_elapsed // 60, time_elapsed % 60))
         return
 
-    #data = load_features_tokens(trn_feat_path, trn_cap_path)
-    #data = load_augmented_features_tokens(trn_feat_path, trn_cap_path, test_feat_path, test_cap_path)
-    loader_train = prepare_loader(image_path, batch_size=args.batch_size, data_part='train')
-    loader_val = prepare_loader(image_path, batch_size=128, data_part='val')
-    data = loader_val.dataset
+    if args.pre_encoded:
+        data = load_features_tokens(trn_feat_path, trn_cap_path)
+        #data = load_augmented_features_tokens(trn_feat_path, trn_cap_path, test_feat_path, test_cap_path)
+        vocab_size = len(data['idx_to_word'])
+    else:
+        loader_train = prepare_loader(image_path, batch_size=args.batch_size, data_part='train')
+        loader_val = prepare_loader(image_path, batch_size=128, data_part='val')
+        data = loader_val.dataset
+        vocab_size = len(data.idx_to_word)
 
     if args.test_solver:
         # test check_bleu
-        model = CaptionModel_B(2048, 128, 160, len(data.idx_to_word), num_layers=1)
+        model = CaptionModel_B(2048, 128, 160, vocab_size, num_layers=1)
         solver = NetSolver(data, model)
         solver.check_bleu('train', num_samples=2000, check_loss=1)
-    '''
+
     if args.train:
-        #model = CaptionModel(2048, 128, 100, 200, len(data['idx_to_word']), num_layers=1)
-        #model = AttentionModel(2048, 128, 160, len(data['idx_to_word']))
-        model = CaptionModel_B(2048, 128, 160, len(data['idx_to_word']), num_layers=1)
+        #model = CaptionModel(2048, 128, 100, 200, vocab_size, num_layers=1)
+        #model = AttentionModel(2048, 128, 160, vocab_size)
+        model = CaptionModel_B(2048, 128, 160, vocab_size, num_layers=1)
         if args.preload:
             model.load_state_dict(torch.load(model_path+args.model_name))
         solver = NetSolver(data, model, batch_size=args.batch_size)
 
+        loaders = None if args.pre_encoded else (loader_train, loader_val)
         t0 = time.time()
-        solver.train(epochs=args.epochs)
-        time_elapsed = time.time() - t0
-        print('Training complete in {:.0f}m {:.0f}s.'.format(time_elapsed // 60, time_elapsed % 60))
-
-        if args.log_plot:
-            history = [solver.bleu_history, solver.val_bleu_history, solver.loss_history, solver.val_loss_history]
-            plot_history(history, output_path+'im_cap_curve.png')
-    '''
-    if args.train:
-        #model = CaptionModel(2048, 128, 100, 200, len(data['idx_to_word']), num_layers=1)
-        #model = AttentionModel(2048, 128, 160, len(data['idx_to_word']))
-        model = CaptionModel_B(2048, 128, 160, len(data.idx_to_word), num_layers=1)
-        if args.preload:
-            model.load_state_dict(torch.load(model_path+args.model_name))
-        solver = NetSolver(data, model, batch_size=args.batch_size)
-
-        t0 = time.time()
-        solver.train(loader_train, loader_val, epochs=args.epochs)
+        solver.train(args.epochs, loaders=loaders, pre_encoded=args.pre_encoded)
         #train_bleu = solver.check_bleu(loader_train, num_batches=62)
         #print('Train BLEU:', train_bleu)
         #val_loss, val_bleu = solver.check_bleu(loader_val, num_batches=15, check_loss=True)
@@ -133,16 +121,18 @@ if __name__ == '__main__':
                         help='check if the model learns')
     parser.add_argument('--train', type=bool, default=0,
                         help='whether to train a model')
-    parser.add_argument('--preload', type=bool, default=0,
-                        help='whether to pre-load model')
     parser.add_argument('--log-plot', type=bool, default=1,
                         help='whether to plot the metrics log')
+    parser.add_argument('--pre-encoded', type=bool, default=0,
+                        help='whether to pre-encode image data')
+    parser.add_argument('--preload', type=bool, default=0,
+                        help='whether to pre-load model')
+    parser.add_argument('--model-name', type=str)
     parser.add_argument('--batch-size', type=int, default=32,
                         help='batch size during training')
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--epochs', type=int, default=10,
                         help='number of training epochs')
-    parser.add_argument('--model-name', type=str)
     args = parser.parse_args()
     main(args)
 

@@ -40,7 +40,7 @@ class NetSolver(object):
         self.model = model
 
         # hyperparameters
-        self.lr_init = kwargs.pop('lr_init', 0.001)
+        self.lr_init = kwargs.pop('lr_init', 0.01)
         self.lr_decay = kwargs.pop('lr_decay', 0.1)
         self.step_size = kwargs.pop('step_size', 40)
         self.batch_size = kwargs.pop('batch_size', 32)
@@ -48,7 +48,6 @@ class NetSolver(object):
         self.checkpoint_name = kwargs.pop('checkpoint_name', 'im_caption')
 
         self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.lr_init)
-        #self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr_init)
         self.scheduler = StepLR(self.optimizer, step_size=self.step_size, gamma=self.lr_decay)
 
         if isinstance(data, Flikr8k):
@@ -61,7 +60,7 @@ class NetSolver(object):
         self._start = self.word_to_idx['<start>']
         self._end = self.word_to_idx['<end>']
 
-        self.model = self.model.to(device=device)  # move the model parameters to device (CPU/GPU)
+        self.model = self.model.to(device=device)
         self._reset()
 
     def _reset(self):
@@ -69,7 +68,6 @@ class NetSolver(object):
         Set up some book-keeping variables for optimization. Don't call this
         manually.
         """
-        # Set up some variables for book-keeping
         self.best_val_loss = 999.
         self.best_val_bleu = 0.
         self.loss_history = []
@@ -107,54 +105,59 @@ class NetSolver(object):
         return loss
 
 
-    def train(self, train_loader, val_loader, epochs):
-        #N = self.data['train_captions'].shape[0]
+    def train(self, epochs, loaders=None, pre_encoded=False):
 
         # Start training for epochs
         for e in range(epochs):
             print('\nEpoch %d / %d:' % (e + 1, epochs))
-            self.model.train()  # set the model in "training" mode
-            self.scheduler.step()  # update the scheduler
+            self.model.train()
+            self.scheduler.step()
             running_loss = 0.
-            '''
-            for t, idx in enumerate(range(0, N, self.batch_size)):
-                captions, features = get_batch(self.data, idx, self.batch_size)
-                loss = self.forward_net(features, captions)
-                if (t + 1) % self.print_every == 0:
-                    print('t = %d, loss = %.4f' % (t+1, loss.item()))
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+            if pre_encoded:
 
-                running_loss += loss.item() * features.size(0)
+                for t, idx in enumerate(range(0, N, self.batch_size)):
+                    captions, features = get_batch(self.data, idx, self.batch_size)
+                    loss = self.forward_net(features, captions)
+                    if (t + 1) % self.print_every == 0:
+                        print('t = %d, loss = %.4f' % (t+1, loss.item()))
 
-            # Shuffle the data
-            shuffle_data(self.data, 'train')
-            '''
-            for t, (ims, captions) in enumerate(train_loader):
-                with torch.no_grad():
-                    ims = ims.to(device)
-                    features = extract_features(cnn, ims).squeeze()
-                loss = self.forward_net(features, captions)
-                if (t + 1) % self.print_every == 0:
-                    print('t = %d, loss = %.4f' % (t+1, loss.item()))
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+                    running_loss += loss.item() * features.size(0)
 
-                running_loss += loss.item() * features.size(0)
-            N = len(train_loader.dataset)
+                shuffle_data(self.data, 'train')
+
+                N = self.data['train_captions'].shape[0]
+                train_loss = running_loss / N
+                train_bleu = self.check_bleu_pre('train', num_samples=2000)
+                val_loss, val_bleu = self.check_bleu_pre('val', num_samples=2000, check_loss=True)
+            else:
+
+                train_loader, val_loader = loaders
+                for t, (ims, captions) in enumerate(train_loader):
+                    with torch.no_grad():
+                        ims = ims.to(device)
+                        features = extract_features(cnn, ims).squeeze()
+                    loss = self.forward_net(features, captions)
+                    if (t + 1) % self.print_every == 0:
+                        print('t = %d, loss = %.4f' % (t+1, loss.item()))
+
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+
+                    running_loss += loss.item() * features.size(0)
+
+                N = len(train_loader.dataset)
+                train_loss = running_loss / N
+                train_bleu = self.check_bleu(train_loader, num_batches=62)
+                val_loss, val_bleu = self.check_bleu(val_loader, num_batches=15, check_loss=True)
 
 
             # Checkpoint and record/print metrics at epoch end
-            train_loss = running_loss / N
-            #train_bleu = self.check_bleu('train', num_samples=2000)
-            #val_loss, val_bleu = self.check_bleu('val', num_samples=2000, check_loss=True)
-            train_bleu = self.check_bleu(train_loader, num_batches=62)
-            val_loss, val_bleu = self.check_bleu(val_loader, num_batches=15, check_loss=True)
-
             self.loss_history.append(train_loss)
             self.val_loss_history.append(val_loss)
             self.bleu_history.append(train_bleu)
@@ -178,8 +181,8 @@ class NetSolver(object):
 
 
     def sample(self, features, max_length=40, b_size=3, model_mode='nic', search_mode='greedy'):
-        self.model.eval()  # set model to "evaluation" mode
 
+        self.model.eval()
         N = features.size(0)
 
         if model_mode == 'nic':
@@ -307,8 +310,9 @@ class NetSolver(object):
 
         return captions
 
-    '''
-    def check_bleu(self, split, num_samples, batch_size=512, check_loss=False):
+
+    def check_bleu_pre(self, split, num_samples, batch_size=512, check_loss=False):
+
         captions, features, _ = sample_batch(self.data, num_samples, split)
         gt_captions = decode_captions(captions.numpy(), self.data.idx_to_word)
         num_batches = num_samples // batch_size
@@ -340,8 +344,10 @@ class NetSolver(object):
             return loss.item(), total_score / num_samples
 
         return total_score / num_samples
-    '''
+
+
     def check_bleu(self, loader, num_batches, check_loss=False):
+
         if check_loss:
             self.model.eval()
             loss = 0
