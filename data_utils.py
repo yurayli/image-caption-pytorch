@@ -1,5 +1,5 @@
 import os, time, json, re
-import itertools, argparse, pickle
+import itertools, argparse, pickle, random
 
 import numpy as np
 import pandas as pd
@@ -15,9 +15,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import LambdaLR, StepLR, MultiStepLR
+from torch.utils.data import Dataset, DataLoader, sampler
 
 import torchvision.transforms as T
 from torchvision import models
+
+from tokenize_caption import *
+from encode_image import *
 
 
 def split_image_files(path):
@@ -45,7 +49,7 @@ def split_captions(path, trn_files, dev_files, test_files):
     for im_id in trn_files: trn_raw_captions[im_id] = raw_captions[im_id]
     for im_id in dev_files: dev_raw_captions[im_id] = raw_captions[im_id]
     for im_id in test_files: test_raw_captions[im_id] = raw_captions[im_id]
-    return trn_raw_captions, dev_raw_captions, test_raw_captions, raw_captions
+    return trn_raw_captions, dev_raw_captions, test_raw_captions
 
 
 def decode_captions(tokens, idx_to_word):
@@ -99,6 +103,89 @@ def sample_batch(data, batch_size, split='train'):
     return torch.LongTensor(b_targets), torch.stack(b_features), b_ids
 
 
+# for exploiting data.Dataset and data.DataLoader, but time too long during training
+def get_captions_ids_mapping(path, data_part, maxlen=40, threshold=1):
+    # word_idx_map(), tokenize() defined in tokenize_caption.py
+    trn_files, dev_files, test_files = split_image_files(path)
+    trn_raw_captions, dev_raw_captions, test_raw_captions = \
+        split_captions(path, trn_files, dev_files, test_files)
+    idx_to_word, word_to_idx = word_idx_map(trn_raw_captions, threshold)
+    if data_part == 'train':
+        captions, image_ids = tokenize(trn_raw_captions, word_to_idx, maxlen)
+    if data_part == 'val':
+        captions, image_ids = tokenize(dev_raw_captions, word_to_idx, maxlen)
+    if data_part == 'test':
+        captions, image_ids = tokenize(test_raw_captions, word_to_idx, maxlen)
+    return captions, image_ids, idx_to_word, word_to_idx
+
+
+class Flikr8k(Dataset):
+
+    def __init__(self, path, data_part, transform=None):
+        self.path = path
+        self.captions, self.image_ids, self.idx_to_word, self.word_to_idx = \
+            get_captions_ids_mapping(path, data_part)
+        self.transform = transform
+        '''
+        self.pre_net = pre_net
+        if pre_net == 'inception_v3':
+            self.net = models.inception_v3(pretrained=True)
+        if pre_net == 'densenet161':
+            self.net = models.densenet161(pretrained=True)
+        if pre_net == 'resnet101':
+            self.net = models.resnet101(pretrained=True)
+        if pre_net == 'vgg16':
+            self.net = models.vgg16_bn(pretrained=True)
+        '''
+
+    def __getitem__(self, index):
+        # feed_forward_net() defined in encode_image.py
+        caption = self.captions[index]
+        im_id = self.image_ids[index]
+        im = Image.open(self.path+'Flicker8k_Dataset/'+im_id)
+        if self.transform is not None:
+            im = self.transform(im)
+        '''
+        with torch.no_grad():
+            self.net.type(dtype)
+            self.net.eval()
+            im = im.type(dtype)
+            im = feed_forward_net(im, self.net, self.pre_net)
+        '''
+        return im, torch.LongTensor(caption)
+
+    def __len__(self):
+        return len(self.image_ids)
+
+
+def prepare_loader(path, batch_size, data_part, shuffle=True):
+    rgb_mean = [0.485, 0.456, 0.406]
+    rgb_std = [0.229, 0.224, 0.225]
+
+    transform_train = T.Compose([
+                    T.Resize((224, 224)),
+                    T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                    T.RandomResizedCrop(224, scale=(0.75, 1.0)),
+                    T.RandomHorizontalFlip(),
+                    T.ToTensor(),
+                    T.Normalize(rgb_mean, rgb_std),
+                ])
+    transform = T.Compose([
+                    T.Resize((224, 224)),
+                    T.ToTensor(),
+                    T.Normalize(rgb_mean, rgb_std),
+                ])
+
+    if data_part == 'train':
+        data_set = Flikr8k(path, data_part, transform=transform_train)
+        loader = DataLoader(data_set, batch_size=batch_size, shuffle=shuffle)
+    else:
+        data_set = Flikr8k(path, data_part, transform=transform)
+        dset_sampler = sampler.SubsetRandomSampler(range(len(data_set))) if shuffle else None
+        loader = DataLoader(data_set, batch_size=batch_size, sampler=dset_sampler)
+    return loader
+
+
 # plot log of loss and bleu during training
 def plot_history(history, fname):
     bleus, val_bleus, losses, val_losses = history
@@ -114,7 +201,7 @@ def plot_history(history, fname):
     ax2 = fig.add_subplot(1,2,2)
     ax2.plot(epochs, losses, '-o')
     ax2.plot(epochs, val_losses, '-o')
-    ax2.set_ylim(bottom=-0.1)
+    #ax2.set_ylim(bottom=-0.1)
     ax2.set_xlabel('Epoch')
     ax2.set_ylabel('Loss')
     ax2.legend(['train', 'val'], loc='upper right')

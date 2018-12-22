@@ -8,6 +8,14 @@ if USE_GPU and torch.cuda.is_available():
 else:
     device = torch.device('cpu')
 
+cnn = models.resnet101(pretrained=True).to(device).eval()
+
+def extract_features(net, xs):
+    net_modules = list(net._modules.keys())[:-1]
+    for module_name in net_modules:
+        xs = net._modules[module_name](xs)
+    return xs
+
 
 # evaluation metric
 def BLEU_score(gt_caption, sample_caption):
@@ -24,7 +32,6 @@ def BLEU_score(gt_caption, sample_caption):
     return BLEUscore
 
 
-
 # solver of model with validation
 class NetSolver(object):
 
@@ -34,17 +41,25 @@ class NetSolver(object):
 
         # hyperparameters
         self.lr_init = kwargs.pop('lr_init', 0.001)
-        self.lr_decay = kwargs.pop('lr_decay', 1.0)
-        self.step_size = kwargs.pop('step_size', 15)
+        self.lr_decay = kwargs.pop('lr_decay', 0.1)
+        self.step_size = kwargs.pop('step_size', 40)
         self.batch_size = kwargs.pop('batch_size', 32)
-        self.print_every = kwargs.pop('print_every', 300)
-        self.checkpoint_name = kwargs.pop('checkpoint_name', 'img_caption_best.pth.tar')
+        self.print_every = kwargs.pop('print_every', 200)
+        self.checkpoint_name = kwargs.pop('checkpoint_name', 'im_caption')
 
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr_init)
+        self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.lr_init)
+        #self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr_init)
         self.scheduler = StepLR(self.optimizer, step_size=self.step_size, gamma=self.lr_decay)
-        self._pad = data['word_to_idx']['<pad>']
-        self._start = data['word_to_idx']['<start>']
-        self._end = data['word_to_idx']['<end>']
+
+        if isinstance(data, Flikr8k):
+            self.word_to_idx = data.word_to_idx
+            self.idx_to_word = data.idx_to_word
+        else:
+            self.word_to_idx = data['word_to_idx']
+            self.idx_to_word = data['idx_to_word']
+        self._pad = self.word_to_idx['<pad>']
+        self._start = self.word_to_idx['<start>']
+        self._end = self.word_to_idx['<end>']
 
         self.model = self.model.to(device=device)  # move the model parameters to device (CPU/GPU)
         self._reset()
@@ -55,14 +70,16 @@ class NetSolver(object):
         manually.
         """
         # Set up some variables for book-keeping
+        self.best_val_loss = 999.
         self.best_val_bleu = 0.
         self.loss_history = []
         self.val_loss_history = []
         self.bleu_history = []
         self.val_bleu_history = []
 
-    def _save_checkpoint(self, epoch):
-        torch.save(self.model.state_dict(), output_path+self.checkpoint_name)
+    def _save_checkpoint(self, epoch, l_val, b_val):
+        torch.save(self.model.state_dict(),
+            output_path+self.checkpoint_name+'_%.3f_%.3f_epoch_%d.pth.tar' %(l_val, b_val, epoch))
         checkpoint = {
             'optimizer': str(type(self.optimizer)),
             'scheduler': str(type(self.scheduler)),
@@ -90,51 +107,77 @@ class NetSolver(object):
         return loss
 
 
-    def train(self, epochs):
-        N = self.data['train_captions'].shape[0]
+    def train(self, train_loader, val_loader, epochs):
+        #N = self.data['train_captions'].shape[0]
 
         # Start training for epochs
         for e in range(epochs):
             print('\nEpoch %d / %d:' % (e + 1, epochs))
             self.model.train()  # set the model in "training" mode
             self.scheduler.step()  # update the scheduler
+            running_loss = 0.
+            '''
             for t, idx in enumerate(range(0, N, self.batch_size)):
                 captions, features = get_batch(self.data, idx, self.batch_size)
                 loss = self.forward_net(features, captions)
                 if (t + 1) % self.print_every == 0:
-                    bch_loss = loss.item()
-                    print('t = %d, loss = %.4f' % (t+1, bch_loss))
+                    print('t = %d, loss = %.4f' % (t+1, loss.item()))
 
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
+                running_loss += loss.item() * features.size(0)
+
             # Shuffle the data
             shuffle_data(self.data, 'train')
+            '''
+            for t, (ims, captions) in enumerate(train_loader):
+                with torch.no_grad():
+                    ims = ims.to(device)
+                    features = extract_features(cnn, ims).squeeze()
+                loss = self.forward_net(features, captions)
+                if (t + 1) % self.print_every == 0:
+                    print('t = %d, loss = %.4f' % (t+1, loss.item()))
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+
+                running_loss += loss.item() * features.size(0)
+            N = len(train_loader.dataset)
+
 
             # Checkpoint and record/print metrics at epoch end
-            train_bleu = self.check_bleu('train', num_samples=2000)
-            val_loss, val_bleu = self.check_bleu('val', num_samples=2000, check_loss=True)
+            train_loss = running_loss / N
+            #train_bleu = self.check_bleu('train', num_samples=2000)
+            #val_loss, val_bleu = self.check_bleu('val', num_samples=2000, check_loss=True)
+            train_bleu = self.check_bleu(train_loader, num_batches=62)
+            val_loss, val_bleu = self.check_bleu(val_loader, num_batches=15, check_loss=True)
 
-            self.loss_history.append(bch_loss)
+            self.loss_history.append(train_loss)
             self.val_loss_history.append(val_loss)
             self.bleu_history.append(train_bleu)
             self.val_bleu_history.append(val_bleu)
 
             # for floydhub metric graphs
-            print('{"metric": "BLEU.", "value": %.4f}' % (train_bleu,))
-            print('{"metric": "Val. BLEU.", "value": %.4f}' % (val_bleu,))
-            print('{"metric": "Loss", "value": %.4f}' % (bch_loss,))
-            print('{"metric": "Val. Loss", "value": %.4f}' % (val_loss,))
+            print('{"metric": "BLEU.", "value": %.4f, "epoch": %d}' % (train_bleu, e+1))
+            print('{"metric": "Val. BLEU.", "value": %.4f, "epoch": %d}' % (val_bleu, e+1))
+            print('{"metric": "Loss", "value": %.4f, "epoch": %d}' % (train_loss, e+1))
+            print('{"metric": "Val. Loss", "value": %.4f, "epoch": %d}' % (val_loss, e+1))
 
             if val_bleu > self.best_val_bleu:
                 print('Saving model...')
                 self.best_val_bleu = val_bleu
-                self._save_checkpoint(e+1)
+                self._save_checkpoint(e+1, val_loss, val_bleu)
+            elif val_loss < self.best_val_loss:
+                print('Saving model...')
+                self.best_val_loss = val_loss
+                self._save_checkpoint(e+1, val_loss, val_bleu)
             print()
 
 
-    def sample(self, features, max_length=40, b_size=3, model_mode='nic', search_mode='beam'):
+    def sample(self, features, max_length=40, b_size=3, model_mode='nic', search_mode='greedy'):
         self.model.eval()  # set model to "evaluation" mode
 
         N = features.size(0)
@@ -155,7 +198,7 @@ class NetSolver(object):
             #c0 = torch.zeros(h0.size()).to(device=device)
             hidden = (h0, c0)
 
-            features = self.model.relu(self.model.proj_f(features)).unsqueeze(1)
+            features = self.model.dropout(self.model.relu(self.model.proj_f(features))).unsqueeze(1)
             _, hidden = self.model.rnn.lstm(features, hidden)
 
             if search_mode == 'greedy':
@@ -264,37 +307,67 @@ class NetSolver(object):
 
         return captions
 
-
-    def check_bleu(self, split, num_samples, batch_size=32, check_loss=False):
+    '''
+    def check_bleu(self, split, num_samples, batch_size=512, check_loss=False):
         captions, features, _ = sample_batch(self.data, num_samples, split)
-        gt_captions = decode_captions(captions.numpy(), self.data['idx_to_word'])
+        gt_captions = decode_captions(captions.numpy(), self.data.idx_to_word)
         num_batches = num_samples // batch_size
         if num_samples % batch_size != 0:
             num_batches += 1
 
-        if check_loss:
-            self.model.eval()
-            loss = 0
+        with torch.no_grad():
+            if check_loss:
+                self.model.eval()
+                loss = 0
+                for i in range(num_batches):
+                    start = i * batch_size
+                    end = (i + 1) * batch_size
+                    feat_batch = features[start:end].clone()
+                    cap_batch = captions[start:end].clone()
+                    loss += self.forward_net(feat_batch, cap_batch)
+                loss /= num_batches
+
+            total_score = 0.
             for i in range(num_batches):
-                print(i)
                 start = i * batch_size
                 end = (i + 1) * batch_size
-                feat_batch = features[start:end].clone()
-                cap_batch = captions[start:end].clone()
-                loss += self.forward_net(feat_batch, cap_batch)
-            loss /= num_batches
-
-        total_score = 0.
-        for i in range(num_batches):
-            start = i * batch_size
-            end = (i + 1) * batch_size
-            sample_captions = self.sample(features[start:end])
-            sample_captions = decode_captions(sample_captions, self.data['idx_to_word'])
-            for gt_caption, sample_caption in zip(gt_captions[start:end], sample_captions):
-                total_score += BLEU_score(gt_caption, sample_caption)
+                sample_captions = self.sample(features[start:end])
+                sample_captions = decode_captions(sample_captions, self.data.idx_to_word)
+                for gt_caption, sample_caption in zip(gt_captions[start:end], sample_captions):
+                    total_score += BLEU_score(gt_caption, sample_caption)
 
         if check_loss:
             return loss.item(), total_score / num_samples
 
         return total_score / num_samples
+    '''
+    def check_bleu(self, loader, num_batches, check_loss=False):
+        if check_loss:
+            self.model.eval()
+            loss = 0
+
+        total_score = 0.
+        with torch.no_grad():
+            for t, (ims, captions) in enumerate(loader):
+                ims = ims.to(device)
+                features = extract_features(cnn, ims).squeeze()
+                gt_captions = decode_captions(captions.numpy(), self.idx_to_word)
+
+                if check_loss:
+                    loss += self.forward_net(features, captions)
+
+                sample_captions = self.sample(features)
+                sample_captions = decode_captions(sample_captions, self.idx_to_word)
+                for gt_caption, sample_caption in zip(gt_captions, sample_captions):
+                    total_score += BLEU_score(gt_caption, sample_caption)
+
+                if (t+1) == num_batches:
+                    break
+
+        if check_loss:
+            loss /= num_batches
+            return loss.item(), total_score / (num_batches*loader.batch_size)
+
+        return total_score / (num_batches*loader.batch_size)
+
 

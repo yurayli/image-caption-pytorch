@@ -45,7 +45,7 @@ def tokenize(captions, word_to_idx, maxlen):
 
 def main(args):
     trn_files, dev_files, test_files = split_image_files(path)
-    trn_raw_captions, dev_raw_captions, test_raw_captions, raw_captions = \
+    trn_raw_captions, dev_raw_captions, test_raw_captions = \
         split_captions(path, trn_files, dev_files, test_files)
     idx_to_word, word_to_idx = word_idx_map(trn_raw_captions, args.threshold)
 
