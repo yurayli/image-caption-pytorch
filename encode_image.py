@@ -110,20 +110,16 @@ def encode_image(files, batch_size, spatial, pre_net):
 
 
 def main(args):
-    trn_files, dev_files, test_files = split_image_files(path)
+    trn_files, test_files = split_image_files(path)
     train_features = encode_image(trn_files, args.batch_size, args.spatial, args.pre_net)
-    val_features = encode_image(dev_files, args.batch_size, args.spatial, args.pre_net)
     test_features = encode_image(test_files, args.batch_size, args.spatial, args.pre_net)
     print('number of train samples:', len(train_features))
     print('train features shape:', list(train_features.values())[0].shape)
-    print('number of valid samples:', len(val_features))
-    print('valid features shape:', list(val_features.values())[0].shape)
     print('number of test samples:', len(test_features))
     print('test features shape:', list(test_features.values())[0].shape)
 
     trn_feats, test_feats = {}, {}
     trn_feats['train_features'] = train_features
-    trn_feats['val_features'] = val_features
     test_feats['test_features'] = test_features
 
     with open(output_path+args.train_feat_path+'.pkl', 'wb') as f:

@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.optim.lr_scheduler import LambdaLR, StepLR, MultiStepLR
+from torch.optim.lr_scheduler import LambdaLR, StepLR, MultiStepLR, ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader, sampler
 
 import torchvision.transforms as T
@@ -31,10 +31,11 @@ def split_image_files(path):
     dev_files = open(path+'Flickr_8k.devImages.txt', 'r').read().strip().split('\n')
     test_files = open(path+'Flickr_8k.testImages.txt', 'r').read().strip().split('\n')
     trn_files += list(set(im_files) - set(trn_files) - set(dev_files) - set(test_files))
-    return trn_files, dev_files, test_files
+    trn_files += dev_files
+    return trn_files, test_files
 
 
-def split_captions(path, trn_files, dev_files, test_files):
+def split_captions(path, trn_files, test_files):
     # load raw captions
     raw_f = open(path + 'Flickr8k.token.txt', 'r').read().strip().split('\n')
     raw_captions = {}
@@ -45,11 +46,10 @@ def split_captions(path, trn_files, dev_files, test_files):
             raw_captions[im_id] = ['<start> ' + cap + ' <end>']
         else:
             raw_captions[im_id].append('<start> ' + cap + ' <end>')
-    trn_raw_captions, dev_raw_captions, test_raw_captions = {}, {}, {}
+    trn_raw_captions, test_raw_captions = {}, {}
     for im_id in trn_files: trn_raw_captions[im_id] = raw_captions[im_id]
-    for im_id in dev_files: dev_raw_captions[im_id] = raw_captions[im_id]
     for im_id in test_files: test_raw_captions[im_id] = raw_captions[im_id]
-    return trn_raw_captions, dev_raw_captions, test_raw_captions
+    return trn_raw_captions, test_raw_captions
 
 
 def decode_captions(tokens, idx_to_word):
@@ -94,9 +94,10 @@ def get_batch(data, idx, batch_size, split='train'):
     return torch.LongTensor(b_targets), torch.stack(b_features)
 
 
-def sample_batch(data, batch_size, split='train'):
+def sample_batch(data, batch_size=64, mask=None, split='train'):
     size = data['%s_captions' % split].shape[0]
-    mask = np.random.choice(size, batch_size)
+    if mask is None:
+        mask = np.random.choice(size, batch_size)
     b_targets = data['%s_captions' % split][mask]
     b_ids = data['%s_image_ids' % split][mask]
     b_features = [torch.FloatTensor(data['%s_features' % split][id]) for id in b_ids]
@@ -106,14 +107,11 @@ def sample_batch(data, batch_size, split='train'):
 # for exploiting data.Dataset and data.DataLoader, but time too long during training
 def get_captions_ids_mapping(path, data_part, maxlen=40, threshold=1):
     # word_idx_map(), tokenize() defined in tokenize_caption.py
-    trn_files, dev_files, test_files = split_image_files(path)
-    trn_raw_captions, dev_raw_captions, test_raw_captions = \
-        split_captions(path, trn_files, dev_files, test_files)
+    trn_files, test_files = split_image_files(path)
+    trn_raw_captions, test_raw_captions = split_captions(path, trn_files, test_files)
     idx_to_word, word_to_idx = word_idx_map(trn_raw_captions, threshold)
     if data_part == 'train':
         captions, image_ids = tokenize(trn_raw_captions, word_to_idx, maxlen)
-    if data_part == 'val':
-        captions, image_ids = tokenize(dev_raw_captions, word_to_idx, maxlen)
     if data_part == 'test':
         captions, image_ids = tokenize(test_raw_captions, word_to_idx, maxlen)
     return captions, image_ids, idx_to_word, word_to_idx
@@ -184,6 +182,57 @@ def prepare_loader(path, batch_size, data_part, shuffle=True):
         dset_sampler = sampler.SubsetRandomSampler(range(len(data_set))) if shuffle else None
         loader = DataLoader(data_set, batch_size=batch_size, sampler=dset_sampler)
     return loader
+
+
+def load_features_tokens(trn_feat_path, trn_cap_path, test_feat_path, test_cap_path, max_train=None):
+    with open(trn_cap_path, 'rb') as f:
+        data = pickle.load(f)
+    with open(trn_feat_path, 'rb') as f:
+        feats = pickle.load(f)
+        for k in feats.keys():
+            data[k] = feats[k]
+    with open(test_cap_path, 'rb') as f:
+        caps = pickle.load(f)
+        for k in caps.keys():
+            data[k] = caps[k]
+    with open(test_feat_path, 'rb') as f:
+        feats = pickle.load(f)
+        for k in feats.keys():
+            data[k] = feats[k]
+    if max_train:
+        size = data['train_captions'].shape[0]
+        mask = np.random.choice(size, max_train)
+        data['train_captions'] = data['train_captions'][mask]
+        data['train_image_ids'] = data['train_image_ids'][mask]
+        trn_encoded = {id:data['train_features'][id] for id in data['train_image_ids']}
+        data['train_features'] = trn_encoded
+    return data
+
+
+def load_augmented_features_tokens(trn_feat_path, trn_cap_path, test_feat_path, test_cap_path):
+    data = {}
+
+    with open(trn_cap_path, 'rb') as f:
+        trn_caps = pickle.load(f)
+    with open(test_cap_path, 'rb') as f:
+        test_caps = pickle.load(f)
+    trn_caps['train_captions'] = np.concatenate([trn_caps['train_captions'], trn_caps['val_captions']])
+    trn_caps['train_image_ids'] = np.concatenate([trn_caps['train_image_ids'], trn_caps['val_image_ids']])
+    trn_caps['val_captions'] = test_caps['test_captions']
+    trn_caps['val_image_ids'] = test_caps['test_image_ids']
+    for k in trn_caps.keys():
+        data[k] = trn_caps[k]
+
+    with open(trn_feat_path, 'rb') as f:
+        trn_feats = pickle.load(f)
+    with open(test_feat_path, 'rb') as f:
+        test_feats = pickle.load(f)
+    data['train_features'] = trn_feats['train_features']
+    for im_id in trn_feats['val_features']:
+        data['train_features'][im_id] = trn_feats['val_features'][im_id]
+    data['val_features'] = test_feats['test_features']
+
+    return data
 
 
 # plot log of loss and bleu during training

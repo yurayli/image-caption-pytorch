@@ -88,7 +88,6 @@ class Decoder_B(nn.Module):
                 truncated_normal_(param, 0, np.sqrt(2./param.size(1)))
 
     def forward(self, word_seq, hidden=None, im_feat=None):
-        _, T = word_seq.size()
         emb = self.embed(word_seq)
         emb = self.dropout_emb(emb)
         if im_feat is None:
@@ -176,7 +175,7 @@ class CaptionModel_B(nn.Module):
 
         # Init different layers
         self.bn_f = nn.BatchNorm1d(input_dim, momentum=0.01)
-        self.proj_f = nn.Linear(input_dim, embedding_dim)
+        #self.proj_f = nn.Linear(input_dim, embedding_dim)
         self.proj_h = nn.Linear(input_dim, hidden_dim)
         self.proj_c = nn.Linear(input_dim, hidden_dim)
         self.relu = nn.ReLU(inplace=True)
@@ -196,8 +195,8 @@ class CaptionModel_B(nn.Module):
         #h0 = torch.zeros((self.num_layers, N, self.hidden_dim)).to(device=device)
         c0 = torch.cat((im_state, ) * self.num_layers, 0)
         #c0 = torch.zeros(h0.size()).to(device=device)
-        im_feat = self.dropout(self.relu(self.proj_f(im_feat)))
-        scores, hidden = self.rnn(word_seq=word_seq, hidden=(h0, c0), im_feat=im_feat)
+        #im_feat = self.dropout(self.relu(self.proj_f(im_feat)))
+        scores, hidden = self.rnn(word_seq=word_seq, hidden=(h0, c0))
         return scores, hidden
 
 

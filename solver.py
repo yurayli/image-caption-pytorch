@@ -42,13 +42,17 @@ class NetSolver(object):
         # hyperparameters
         self.lr_init = kwargs.pop('lr_init', 0.01)
         self.lr_decay = kwargs.pop('lr_decay', 0.1)
-        self.step_size = kwargs.pop('step_size', 40)
+        self.step_size = kwargs.pop('step_size', 16)
         self.batch_size = kwargs.pop('batch_size', 32)
         self.print_every = kwargs.pop('print_every', 200)
         self.checkpoint_name = kwargs.pop('checkpoint_name', 'im_caption')
 
-        self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.lr_init)
+        #self.optimizer = optim.RMSprop(self.model.parameters(), lr=self.lr_init)
+        #self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr_init)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=self.lr_init,
+                                   momentum=0.9, weight_decay=0.001)
         self.scheduler = StepLR(self.optimizer, step_size=self.step_size, gamma=self.lr_decay)
+        #self.scheduler = ReduceLROnPlateau(self.optimizer, factor=self.lr_decay, patience=20)
 
         if isinstance(data, Flikr8k):
             self.word_to_idx = data.word_to_idx
@@ -116,6 +120,7 @@ class NetSolver(object):
 
             if pre_encoded:
 
+                N = self.data['train_captions'].shape[0]
                 for t, idx in enumerate(range(0, N, self.batch_size)):
                     captions, features = get_batch(self.data, idx, self.batch_size)
                     loss = self.forward_net(features, captions)
@@ -130,10 +135,9 @@ class NetSolver(object):
 
                 shuffle_data(self.data, 'train')
 
-                N = self.data['train_captions'].shape[0]
                 train_loss = running_loss / N
                 train_bleu = self.check_bleu_pre('train', num_samples=2000)
-                val_loss, val_bleu = self.check_bleu_pre('val', num_samples=2000, check_loss=True)
+                val_loss, val_bleu = self.check_bleu_pre('test', num_samples=2000, check_loss=True)
             else:
 
                 train_loader, val_loader = loaders
@@ -156,6 +160,8 @@ class NetSolver(object):
                 train_bleu = self.check_bleu(train_loader, num_batches=62)
                 val_loss, val_bleu = self.check_bleu(val_loader, num_batches=15, check_loss=True)
 
+            #self.scheduler.step(val_loss)
+
 
             # Checkpoint and record/print metrics at epoch end
             self.loss_history.append(train_loss)
@@ -170,13 +176,17 @@ class NetSolver(object):
             print('{"metric": "Val. Loss", "value": %.4f, "epoch": %d}' % (val_loss, e+1))
 
             if val_bleu > self.best_val_bleu:
-                print('Saving model...')
+                print('updating best val bleu...')
                 self.best_val_bleu = val_bleu
-                self._save_checkpoint(e+1, val_loss, val_bleu)
+                if e > 10:
+                    print('Saving model...')
+                    self._save_checkpoint(e+1, val_loss, val_bleu)
             elif val_loss < self.best_val_loss:
-                print('Saving model...')
+                print('updating best val loss...')
                 self.best_val_loss = val_loss
-                self._save_checkpoint(e+1, val_loss, val_bleu)
+                if e > 10:
+                    print('Saving model...')
+                    self._save_checkpoint(e+1, val_loss, val_bleu)
             print()
 
 
@@ -201,8 +211,8 @@ class NetSolver(object):
             #c0 = torch.zeros(h0.size()).to(device=device)
             hidden = (h0, c0)
 
-            features = self.model.dropout(self.model.relu(self.model.proj_f(features))).unsqueeze(1)
-            _, hidden = self.model.rnn.lstm(features, hidden)
+            #features = self.model.dropout(self.model.relu(self.model.proj_f(features))).unsqueeze(1)
+            #_, hidden = self.model.rnn.lstm(features, hidden)
 
             if search_mode == 'greedy':
                 captions = self._pad * np.ones((N, max_length), dtype=np.int32)
@@ -313,8 +323,8 @@ class NetSolver(object):
 
     def check_bleu_pre(self, split, num_samples, batch_size=512, check_loss=False):
 
-        captions, features, _ = sample_batch(self.data, num_samples, split)
-        gt_captions = decode_captions(captions.numpy(), self.data.idx_to_word)
+        captions, features, _ = sample_batch(self.data, num_samples, split=split)
+        gt_captions = decode_captions(captions.numpy(), self.data['idx_to_word'])
         num_batches = num_samples // batch_size
         if num_samples % batch_size != 0:
             num_batches += 1
@@ -336,7 +346,7 @@ class NetSolver(object):
                 start = i * batch_size
                 end = (i + 1) * batch_size
                 sample_captions = self.sample(features[start:end])
-                sample_captions = decode_captions(sample_captions, self.data.idx_to_word)
+                sample_captions = decode_captions(sample_captions, self.data['idx_to_word'])
                 for gt_caption, sample_caption in zip(gt_captions[start:end], sample_captions):
                     total_score += BLEU_score(gt_caption, sample_caption)
 

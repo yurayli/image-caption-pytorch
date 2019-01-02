@@ -44,20 +44,16 @@ def tokenize(captions, word_to_idx, maxlen):
 
 
 def main(args):
-    trn_files, dev_files, test_files = split_image_files(path)
-    trn_raw_captions, dev_raw_captions, test_raw_captions = \
-        split_captions(path, trn_files, dev_files, test_files)
+    trn_files, test_files = split_image_files(path)
+    trn_raw_captions, test_raw_captions = split_captions(path, trn_files, test_files)
     idx_to_word, word_to_idx = word_idx_map(trn_raw_captions, args.threshold)
 
     trn_captions, trn_image_ids = tokenize(trn_raw_captions, word_to_idx, args.maxlen)
-    dev_captions, dev_image_ids = tokenize(dev_raw_captions, word_to_idx, args.maxlen)
     test_captions, test_image_ids = tokenize(test_raw_captions, word_to_idx, args.maxlen)
 
     trn_data, test_data = {}, {}
     trn_data['train_captions'] = trn_captions
     trn_data['train_image_ids'] = trn_image_ids
-    trn_data['val_captions'] = dev_captions
-    trn_data['val_image_ids'] = dev_image_ids
     trn_data['idx_to_word'] = idx_to_word
     trn_data['word_to_idx'] = word_to_idx
     test_data['test_captions'] = test_captions
