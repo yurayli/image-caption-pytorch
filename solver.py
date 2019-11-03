@@ -1,4 +1,4 @@
-from data_utils import *
+from .data_utils import *
 
 output_path = '/output/'
 USE_GPU = True

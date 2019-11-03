@@ -1,4 +1,4 @@
-from data_utils import *
+from .data_utils import *
 
 USE_GPU = True
 dtype = torch.float32

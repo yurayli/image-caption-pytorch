@@ -1,6 +1,6 @@
-from data_utils import *
-from solver import *
-from model import *
+from .data_utils import *
+from .solver import *
+from .model import *
 
 trn_feat_path = '/features/train_feat_arrays.pkl'
 trn_cap_path = '/captions/train_cap_tokens.pkl'
