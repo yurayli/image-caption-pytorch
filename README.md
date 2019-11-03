@@ -9,11 +9,11 @@ The model architecture is as below. The encoder network for the image is Resnet-
 
 The model is trained by SGD with momentum. The learning rate starts from 0.01 and is divided by 10 in the error plateaus. The momentum of 0.9 and the weight decay of 0.001 are used.
 
-The model [1] can obtain relatively reasonable descriptions (which can be seen in the notebook), with the testset BLEU-1 score ~0.31.
+The model [1] can obtain relatively reasonable descriptions (which can be seen in the notebook), with the testset BLEU-1 score 35.7.
 
 ### Dependencies
 Pytorch 0.4.1
 
 ### Reference
-[1] Show and Tell: A Neural Image Caption Generator (https://arxiv.org/abs/1411.4555)  
+[1] Show and Tell: A Neural Image Caption Generator (https://arxiv.org/abs/1411.4555)
 [2] Show, Attend and Tell: Neural Image Caption Generation with Visual Attention (https://arxiv.org/abs/1502.03044)
