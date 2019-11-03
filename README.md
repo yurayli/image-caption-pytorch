@@ -9,7 +9,7 @@ The model architecture is as below. The encoder network for the image is Resnet-
 
 The model is trained by SGD with momentum. The learning rate starts from 0.01 and is divided by 10 in the error plateaus. The momentum of 0.9 and the weight decay of 0.001 are used.
 
-The model [1] can obtain relatively reasonable descriptions (which can be seen in the notebook), with the testset BLEU-1 score 35.7.
+The model [1] can obtain relatively reasonable descriptions, with the testset BLEU-1 score 35.7.
 
 ### Examples
 |                  Images                |                  Captions                  |
