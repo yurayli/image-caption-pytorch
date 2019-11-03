@@ -1,4 +1,5 @@
 from .data_utils import *
+from .eval_metrics import *
 
 output_path = '/output/'
 USE_GPU = True
@@ -15,21 +16,6 @@ def extract_features(net, xs):
     for module_name in net_modules:
         xs = net._modules[module_name](xs)
     return xs
-
-
-# evaluation metric
-def BLEU_score(gt_caption, sample_caption):
-    """
-    gt_caption: string, ground-truth caption
-    sample_caption: string, your model's predicted caption
-    Returns unigram BLEU score.
-    """
-    reference = [x for x in gt_caption.split(' ')
-                 if ('<end>' not in x and '<start>' not in x and '<unk>' not in x)]
-    hypothesis = [x for x in sample_caption.split(' ')
-                  if ('<end>' not in x and '<start>' not in x and '<unk>' not in x)]
-    BLEUscore = nltk.translate.bleu_score.sentence_bleu([reference], hypothesis, weights = [1])
-    return BLEUscore
 
 
 # solver of model with validation
@@ -347,13 +333,17 @@ class NetSolver(object):
                 end = (i + 1) * batch_size
                 sample_captions = self.sample(features[start:end])
                 sample_captions = decode_captions(sample_captions, self.data['idx_to_word'])
-                for gt_caption, sample_caption in zip(gt_captions[start:end], sample_captions):
-                    total_score += BLEU_score(gt_caption, sample_caption)
+                # for gt_caption, sample_caption in zip(gt_captions[start:end], sample_captions):
+                #     total_score += BLEU_score(gt_caption, sample_caption)
+                total_score += eval_bleu.calculate(list(map(remove_special_tokens, gt_captions[start:end])),
+                                    list(map(remove_special_tokens, sample_captions)))[bleu_type]
 
         if check_loss:
-            return loss.item(), total_score / num_samples
+            # return loss.item(), total_score / num_samples
+            return loss.item(), total_score / num_batches
 
-        return total_score / num_samples
+        # return total_score / num_samples
+        return total_score / num_batches
 
 
     def check_bleu(self, loader, num_batches, check_loss=False):
@@ -374,16 +364,20 @@ class NetSolver(object):
 
                 sample_captions = self.sample(features)
                 sample_captions = decode_captions(sample_captions, self.idx_to_word)
-                for gt_caption, sample_caption in zip(gt_captions, sample_captions):
-                    total_score += BLEU_score(gt_caption, sample_caption)
+                # for gt_caption, sample_caption in zip(gt_captions, sample_captions):
+                #     total_score += BLEU_score(gt_caption, sample_caption)
+                total_score += eval_bleu.calculate(list(map(remove_special_tokens, gt_captions)),
+                                    list(map(remove_special_tokens, sample_captions)))[bleu_type]
 
                 if (t+1) == num_batches:
                     break
 
         if check_loss:
             loss /= num_batches
-            return loss.item(), total_score / (num_batches*loader.batch_size)
+            # return loss.item(), total_score / (num_batches*loader.batch_size)
+            return loss.item(), total_score / num_batches
 
-        return total_score / (num_batches*loader.batch_size)
+        # return total_score / (num_batches*loader.batch_size)
+        return total_score / num_batches
 
 
