@@ -1,5 +1,5 @@
-from .data_utils import *
-from .eval_metrics import *
+from data_utils import *
+from eval_metrics import *
 
 output_path = '/output/'
 USE_GPU = True

@@ -1,4 +1,4 @@
-from .data_utils import *
+from data_utils import *
 
 dtype = torch.cuda.FloatTensor
 path = '/flikr8k/'

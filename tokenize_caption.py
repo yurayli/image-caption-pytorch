@@ -1,4 +1,4 @@
-from .data_utils import *
+from data_utils import *
 
 path = '/flikr8k/'
 output_path = '/output/'

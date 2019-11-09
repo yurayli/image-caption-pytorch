@@ -20,8 +20,8 @@ from torch.utils.data import Dataset, DataLoader, sampler
 import torchvision.transforms as T
 from torchvision import models
 
-from .tokenize_caption import *
-from .encode_image import *
+from tokenize_caption import *
+from encode_image import *
 
 
 def split_image_files(path):
