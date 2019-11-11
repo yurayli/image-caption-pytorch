@@ -3,7 +3,7 @@
 ----
 Implement neural image captioning models with PyTorch based on encoder-decoder architecture.
 
-The dataset is Flikr8k, which is small enough for computing budget and fastly getting the results. Within the dataset, there are 8091 images, with 5 captions for each image. Thus it is prone to overfit if the model is too complex. The official source is taken down, another links for the dataset could be [here](https://www.kaggle.com/shadabhussain/flickr8k) and [here](https://github.com/jbrownlee/Datasets/releases)
+The dataset is Flikr8k, which is small enough for computing budget and quickly getting the results. Within the dataset, there are 8091 images, with 5 captions for each image. Thus it is prone to overfit if the model is too complex. The official source is taken down, another links for the dataset could be [here](https://www.kaggle.com/shadabhussain/flickr8k) and [here](https://github.com/jbrownlee/Datasets/releases)
 
 The model architecture is as below. The encoder network for the image is Resnet-101 (could be loaded from torchvision). The decoder is basically a LSTM-based language model, with the context vector (encoded image feature) as the initial hidden/cell state of the LSTM [1]. Attentive model is also implemented [2].
 
