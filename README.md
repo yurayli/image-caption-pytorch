@@ -3,13 +3,13 @@
 ----
 Implement neural image captioning models with PyTorch based on encoder-decoder architecture.
 
-The dataset is Flikr8k, which is small enough for computing budget and quickly getting the results. Within the dataset, there are 8091 images, with 5 captions for each image. Thus it is prone to overfit if the model is too complex. The official source is taken down, another links for the dataset could be [here](https://www.kaggle.com/shadabhussain/flickr8k) and [here](https://github.com/jbrownlee/Datasets/releases)
+The dataset is Flikr8k, which is small enough for computing budget and quickly getting the results. Within the dataset, there are 8091 images, with 5 captions for each image. Thus it is prone to overfit if the model is too complex. The official source is broken, another links for the dataset could be [here](https://www.kaggle.com/shadabhussain/flickr8k) and [here](https://github.com/jbrownlee/Datasets/releases)
 
-The model architecture is as below. The encoder network for the image is Resnet-101 (could be loaded from torchvision). The decoder is basically a LSTM-based language model, with the context vector (encoded image feature) as the initial hidden/cell state of the LSTM [1]. Attentive model is also implemented [2].
+The model architecture is described as below. The encoder network for the image is Resnet-101 (could be loaded from torchvision). The decoder is basically a LSTM-based language model, with the context vector (encoded image feature) as the initial hidden/cell state of the LSTM [1]. Attentive model is also implemented [2].
 
-The model is trained by SGD with momentum. The learning rate starts from 0.01 and is divided by 10 in the error plateaus. The momentum of 0.9 and the weight decay of 0.001 are used.
+The model is trained by SGD with momentum. The learning rate starts from 0.01 and is divided by 10 as stuck at a plateau. The momentum of 0.9 and the weight decay of 0.001 are used.
 
-The model [1] can obtain relatively reasonable descriptions, with the testset BLEU-1 score 35.7.
+The model [1] can obtain relatively reasonable descriptions, with the BLEU-1 test score 35.7.
 
 ### Examples
 |                  Images                |                  Captions                  |
